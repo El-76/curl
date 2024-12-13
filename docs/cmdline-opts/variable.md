@@ -36,6 +36,14 @@ the environment variable is not set, use --variable %name=content or
 --variable %name@content. Note that on some systems - but not all -
 environment variables are case insensitive.
 
+When getting contents from a file, you can request to get a byte range from it
+by appending ";[start-end]" to the filename, where *start* and *end* are byte
+offsets to include from the file. For example, asking for offset "2-10" means
+offset two to offset ten, including the byte offset 10, meaning 9 bytes in
+total. "2-2" means a single byte at offset 2. Not providing a second number
+implies to the end of the file. The start offset cannot be larger than the end
+offset.
+
 When expanding variables, curl supports a set of functions that can make the
 variable contents more convenient to use. You apply a function to a variable
 expansion by adding a colon and then list the desired functions in a
