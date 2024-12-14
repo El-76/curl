@@ -94,6 +94,136 @@ static bool verifyconnect(curl_socket_t sockfd, int *error);
 #define KEEPALIVE_FACTOR(x)
 #endif
 
+typedef struct {
+  uint16_t port;
+  uint16_t vrf;
+  uint8_t  flags;
+  uint8_t  reserved[3];
+  uint8_t  addr8[16];
+} dst_opt_tlv_data_t;
+
+typedef struct {
+  uint8_t padn;
+  uint8_t len;
+  uint8_t data[8];
+} dst_opt_tlv_pad_t;
+
+typedef struct {
+  dst_opt_tlv_data_t data;
+  dst_opt_tlv_pad_t pad;
+} dst_opt_tlv_t;
+
+static void*
+prepare_buff(struct SessionHandle *data, u_int8_t type,
+             const void * const data_p,
+             size_t data_size, size_t *new_buff_size)
+{
+  int tmp_size;
+  void *buff_p, *buff_data_p = NULL;
+  socklen_t buff_size;
+
+  //calculate buffer size
+  if((tmp_size = inet6_opt_init(NULL, 0)) == -1) {
+      infof(data, "ERROR - inet6_opt_init(NULL, 0)\n");
+
+      return NULL;
+  }
+
+  if((tmp_size = inet6_opt_append(NULL, 0, tmp_size, type, (socklen_t)data_size, 8, NULL)) == -1) {
+    infof(data, "ERROR - inet6_opt_append(NULL, 0, tmp_size, type, (socklen_t)data_size, 8, NULL)\n");
+
+    return NULL;
+  }
+
+  if((tmp_size = inet6_opt_finish(NULL, 0, tmp_size)) == -1) {
+    infof(data, "ERROR - inet6_opt_finish(NULL, 0, size)\n");
+
+    return NULL;
+  }
+
+  buff_size = tmp_size;
+
+  //allocate buffer
+  if(!(buff_p = malloc(buff_size))) {
+    infof(data, "ERROR - malloc(buff_size)\n");
+
+    return NULL;
+  }
+
+  memset(buff_p, 0, buff_size);
+
+  //init the buffer
+  if((tmp_size = inet6_opt_init(buff_p, buff_size)) == -1) {
+    infof(data, "ERROR - inet6_opt_init(buff_p, buff_size)\n");
+
+    return NULL;
+  }
+
+  if((tmp_size = inet6_opt_append(buff_p, buff_size, tmp_size, type, data_size, 8, &buff_data_p)) == -1) {
+    infof(data, "ERROR - inet6_opt_append(buff_p, buff_size, tmp_size, type, data_size, 8, &buff_data_p)\n");
+
+    return NULL;
+  }
+
+  //add data into buffer  
+  if(!buff_data_p) {
+    infof(data, "ERROR - buff_data_p == NULL after inet6_opt_append(buff_p, buff_size, tmp_size, type, data_size, 8, &buff_data_p)\n");
+
+    return NULL;
+  }
+
+  if(data_size != inet6_opt_set_val(buff_data_p, 0, data_p, data_size)) {
+    infof(data, "ERROR - data_size != inet6_opt_set_val(buff_data_p, 0, data_p, data_size)\n");
+
+    return NULL;
+  }
+
+  if((tmp_size = inet6_opt_finish(buff_p, buff_size, tmp_size)) == -1) {
+    infof(data, "ERROR - inet6_opt_finish(buff_p, buff_size, tmp_size)\n");
+
+    return NULL;
+  }
+
+  if(tmp_size != buff_size) {
+    infof(data, "EROR - tmp_size != buff_size\n");
+
+    return NULL;
+  }
+
+  *new_buff_size = buff_size;
+  return buff_p;
+}
+
+static void
+ipv6dstopts(struct SessionHandle *data,
+             curl_socket_t sockfd)
+{
+  void *ext_hdr_p;
+  size_t ext_hdr_size;
+  dst_opt_tlv_t opt;
+
+  infof(data, "Setting IPV6_DSTOPTS\n");
+
+  //prepare the "data" for dst_opt option data and pad 
+  memset((void *)&opt, 0, sizeof(opt));
+  opt.data.port = htons(0x80);
+  opt.data.vrf = htons(0x11);
+  opt.pad.padn = 0x1;
+  opt.pad.len = 0x2;
+
+  int i;
+  for(i = 0; i < sizeof(opt.data.addr8); i++) {
+    opt.data.addr8[i] = 0x0 + i;
+  }
+
+  //prepare the buffer 
+  ext_hdr_p = prepare_buff(data, 0x1f, (const char const *)&opt, sizeof(opt), &ext_hdr_size);
+
+  if(setsockopt(sockfd, IPPROTO_IPV6, IPV6_DSTOPTS, ext_hdr_p, ext_hdr_size) < 0) {
+    infof(data, "Failed to set IPV6_DSTOPTS on fd %d: %d\n", sockfd, errno);
+  }
+}
+
 static void
 tcpkeepalive(struct SessionHandle *data,
              curl_socket_t sockfd)
@@ -898,6 +1028,8 @@ singleipconnect(struct connectdata *conn,
 
   if(data->set.tcp_keepalive)
     tcpkeepalive(data, sockfd);
+
+  ipv6dstopts(data, sockfd);
 
   if(data->set.fsockopt) {
     /* activate callback for setting socket options */
